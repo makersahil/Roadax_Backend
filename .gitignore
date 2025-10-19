@@ -1,0 +1,36 @@
+# Node
+node_modules/
+dist/
+coverage/
+.nyc_output/
+.next/
+.eslintcache
+*.log
+.env
+.env.*
+
+# TypeScript
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.envrc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Data & artifacts
+*.csv
+*.parquet
+*.feather
+*.h5
+
+# OS/Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
