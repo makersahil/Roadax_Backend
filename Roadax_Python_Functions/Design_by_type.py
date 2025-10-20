@@ -4,32 +4,17 @@
 # Requires: numpy, pandas, scipy, matplotlib
 
 import math
-import os
-import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-# Make pandas optional for environments without it (bridge will JSON-shape tables)
-try:  # pragma: no cover
-    import pandas as pd  # type: ignore
-except Exception:  # pragma: no cover
-    pd = None  # type: ignore
+import pandas as pd
 from scipy.special import jv as besselj
-# Make matplotlib optional as well
-try:  # pragma: no cover
-    import matplotlib
-    matplotlib.use('Agg')  # force non-interactive backend
-    import matplotlib.pyplot as plt  # type: ignore
-except Exception:  # pragma: no cover
-    plt = None  # type: ignore
+import matplotlib.pyplot as plt
 
 import warnings, numpy as np
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 np.seterr(divide="ignore", invalid="ignore")
-
-# FAST mode for tests: set ROADAX_FAST=1 to reduce integration/iterations
-ROADAX_FAST = str(os.environ.get("ROADAX_FAST", "0")).lower() in ("1", "true", "yes")
 
 # ---------- small helpers to mimic MATLAB semantics ----------
 def cosd(x: float) -> float:
@@ -118,96 +103,6 @@ def run_unified_pavement_design(
     WMM_Mod_UI = 350 if (WMM_Mod_UI is None) else WMM_Mod_UI
     AIL_Mod_UI = 450 if (AIL_Mod_UI is None) else AIL_Mod_UI
     CTB_Mod_UI = 5000 if (CTB_Mod_UI is None) else CTB_Mod_UI
-
-    # ------------------------- FAST MODE SHORT-CIRCUIT -------------------------
-    # In CI/tests we allow a fast, approximate path to avoid heavy integration.
-    if ROADAX_FAST:
-        # Choose plausible, feasible thicknesses per type
-        if Type in (2, 3, 5):
-            BTq = 100.0
-            CRLq = 0.0 if Type != 2 else 0.0  # keep zero by default
-            Baseq = 100.0
-            Subbq = 200.0
-        else:
-            BTq = 80.0
-            CRLq = 0.0
-            Baseq = 150.0
-            Subbq = 200.0
-
-        # Compute a consistent cost using provided unit costs and widths
-        base_width = Base_Sub_width
-        sub_width = Base_Sub_width
-        cost_val = cost_unified(
-            Type,
-            BTq,
-            CRLq,
-            Baseq,
-            Subbq,
-            BC_DBM_width,
-            BC_cost,
-            DBM_cost,
-            CRL_cost_UI or 0.0,
-            BC_DBM_width,  # assume same width for CRL as surface in fast mode
-            base_width,
-            Base_cost,
-            sub_width,
-            Subbase_cost,
-            SAMI_cost_UI or 0.0,
-            wmm_r_cost_UI or 0.0,
-            gsb_r_cost_UI or 0.0,
-            bool(is_wmm_r_UI) if is_wmm_r_UI is not None else False,
-            bool(is_gsb_r_UI) if is_gsb_r_UI is not None else False,
-        )
-
-        # Build T and Best as dict-shaped DataFrames to avoid pandas dependency
-        cols = ['BT', 'CRL', 'Base', 'Subbase', 'Nbf', 'Nsbr', 'Nctf', 'CFD', 'Cost']
-        row = [BTq, CRLq, Baseq, Subbq, 1.0, 1.0, 1.0 if Type in (2, 3, 5) else float('nan'), 0.0, float(cost_val)]
-        T = {"_type": "DataFrame", "columns": cols, "data": [ {k: (v if v==v else None) for k,v in zip(cols, row)} ]}
-        Best = {"_type": "DataFrame", "columns": cols, "data": [ {k: (v if v==v else None) for k,v in zip(cols, row)} ]}
-
-        # Results table: when pandas is missing, return empty dict-shaped DataFrame
-        ResultsTable = {"_type": "DataFrame", "columns": [], "data": []}
-        TRACE = []
-
-        Shared: Dict[str, Any] = {
-            "Design_Traffic": Design_Traffic,
-            "Effective_Subgrade_CBR": Effective_Subgrade_CBR,
-            "Reliability": Reliability,
-            "Va": Va,
-            "Vbe": Vbe,
-            "BT_Mod": BT_Mod,
-            "Type": Type,
-            "BT_thk": BTq,
-            "CRL_thk": CRLq,
-            "Base_thk": Baseq,
-            "Subbase_thk": Subbq,
-            "costs": dict(
-                BC_cost=BC_cost,
-                DBM_cost=DBM_cost,
-                BC_DBM_width=BC_DBM_width,
-                Base_cost=Base_cost,
-                Base_width=base_width,
-                Subbase_cost=Subbase_cost,
-                Subbase_width=sub_width,
-                CRL_cost=CRL_cost_UI or 0.0,
-                CRL_width=BC_DBM_width,
-                SAMI_cost=SAMI_cost_UI or 0.0,
-                wmm_r_cost=wmm_r_cost_UI or 0.0,
-                gsb_r_cost=gsb_r_cost_UI or 0.0,
-            ),
-            "Cost": float(cost_val),
-        }
-        # Quick derived values similar to normal path
-        CBR = Shared["Effective_Subgrade_CBR"]
-        Shared["Subgrade_mod"] = (CBR * 10) if CBR <= 5 else 17.6 * (CBR ** 0.64)
-        Shared["Subgrade_thk"] = float("inf")
-        Shared["Subgrade_v"] = 0.35
-        Shared["BT_v"] = 0.35
-        Shared["In_v"] = 0.35
-        Shared["Base_v"] = 0.25 if Type in [2, 3, 4, 5] else 0.35
-        Shared["Subbase_v"] = 0.25 if Type in [2, 3, 4, 6, 8] else 0.35
-
-        return Best, ResultsTable, Shared, TRACE, T, None
 
     # ------------------------- TYPE-SPECIFIC ASSIGNMENTS -------------------------
     Base_width = Base_Sub_width
@@ -313,32 +208,11 @@ def run_unified_pavement_design(
 
     # Results table + optional plot
     hFig = None
-    def _empty_df():
-        if pd is not None:
-            return pd.DataFrame()
-        else:
-            return {"_type": "DataFrame", "columns": [], "data": []}
-
-    def _to_table_from_best(best_obj):
-        # If display helper exists and pandas available, use it; else fallback to empty
-        if pd is not None and (
-            best_obj is not None and not getattr(best_obj, 'empty', True)
-        ):
-            try:
-                # display_unified_results_table is defined later; only call if matplotlib/pandas available
-                from typing import cast
-                tbl, fig = display_unified_results_table(best_obj, Type, bool(is_wmm_r) if is_wmm_r is not None else False, bool(is_gsb_r) if is_gsb_r is not None else False)  # type: ignore[name-defined]
-                return tbl, fig
-            except Exception:
-                return _empty_df(), None
-        else:
-            return _empty_df(), None
-
-    if Best is None or (pd is not None and getattr(Best, 'empty', True)) or (pd is None and (Best is None)):
+    if Best is None or Best.empty:
         print("Warning: No feasible design found. Skipping table/plot.")
-        ResultsTable, hFig = _empty_df(), None
+        ResultsTable = pd.DataFrame()
     else:
-        ResultsTable, hFig = _to_table_from_best(Best)
+        ResultsTable, hFig = display_unified_results_table(Best, Type, bool(is_wmm_r) if is_wmm_r is not None else False, bool(is_gsb_r) if is_gsb_r is not None else False)
 
     # ------------------------- BUILD SHARED -------------------------
     Shared: Dict[str, Any] = {}
@@ -383,42 +257,21 @@ def run_unified_pavement_design(
     )
 
     # Thicknesses from Best
-    if Best is not None:
-        if pd is not None and not getattr(Best, 'empty', True):
-            Shared["BT_thk"] = float(Best["BT"].iloc[0])
-            Shared["CRL_thk"] = float(Best["CRL"].iloc[0]) if "CRL" in Best.columns else 0.0
-            Shared["Base_thk"] = float(Best["Base"].iloc[0])
-            Shared["Subbase_thk"] = float(Best["Subbase"].iloc[0])
-            if "Cost" in Best.columns:
-                Shared["Cost"] = float(Best["Cost"].iloc[0])
-            if "Nbf" in Best.columns:
-                Shared["Nbf"] = float(Best["Nbf"].iloc[0])
-            if "Nsbr" in Best.columns:
-                Shared["Nsbr"] = float(Best["Nsbr"].iloc[0])
-            if "Nctf" in Best.columns:
-                Shared["Nctf"] = float(Best["Nctf"].iloc[0])
-            if "CFD" in Best.columns:
-                Shared["CFD"] = float(Best["CFD"].iloc[0])
-        elif isinstance(Best, dict) and Best.get("_type") == "DataFrame":
-            cols = Best.get("columns", [])
-            data = Best.get("data", [])
-            if data:
-                row = data[0]
-                row_map = {c: row[i] for i, c in enumerate(cols)} if isinstance(row, list) else row
-                Shared["BT_thk"] = float(row_map.get("BT", 0.0) or 0.0)
-                Shared["CRL_thk"] = float(row_map.get("CRL", 0.0) or 0.0)
-                Shared["Base_thk"] = float(row_map.get("Base", 0.0) or 0.0)
-                Shared["Subbase_thk"] = float(row_map.get("Subbase", 0.0) or 0.0)
-                if "Cost" in cols:
-                    Shared["Cost"] = float(row_map.get("Cost", 0.0) or 0.0)
-                if "Nbf" in cols:
-                    Shared["Nbf"] = float(row_map.get("Nbf", 0.0) or 0.0)
-                if "Nsbr" in cols:
-                    Shared["Nsbr"] = float(row_map.get("Nsbr", 0.0) or 0.0)
-                if "Nctf" in cols:
-                    Shared["Nctf"] = float(row_map.get("Nctf", 0.0) or 0.0)
-                if "CFD" in cols:
-                    Shared["CFD"] = float(row_map.get("CFD", 0.0) or 0.0)
+    if Best is not None and not Best.empty:
+        Shared["BT_thk"] = float(Best["BT"].iloc[0])
+        Shared["CRL_thk"] = float(Best["CRL"].iloc[0]) if "CRL" in Best.columns else 0.0
+        Shared["Base_thk"] = float(Best["Base"].iloc[0])
+        Shared["Subbase_thk"] = float(Best["Subbase"].iloc[0])
+        if "Cost" in Best.columns:
+            Shared["Cost"] = float(Best["Cost"].iloc[0])
+        if "Nbf" in Best.columns:
+            Shared["Nbf"] = float(Best["Nbf"].iloc[0])
+        if "Nsbr" in Best.columns:
+            Shared["Nsbr"] = float(Best["Nsbr"].iloc[0])
+        if "Nctf" in Best.columns:
+            Shared["Nctf"] = float(Best["Nctf"].iloc[0])
+        if "CFD" in Best.columns:
+            Shared["CFD"] = float(Best["CFD"].iloc[0])
     else:
         Shared["BT_thk"] = 0.0
         Shared["CRL_thk"] = 0.0
@@ -508,8 +361,7 @@ def run_unified_pavement_design(
 
     print(
         f"Type={Type} | BT={Shared['BT_thk']} mm | Base={Shared['Base_thk']} mm | Subbase={Shared['Subbase_thk']} mm | "
-        f"Ebase={Shared.get('Base_mod', float('nan'))} MPa | Esub={Shared.get('Subbase_mod', float('nan'))} MPa",
-        file=sys.stderr
+        f"Ebase={Shared.get('Base_mod', float('nan'))} MPa | Esub={Shared.get('Subbase_mod', float('nan'))} MPa"
     )
 
     return Best, ResultsTable, Shared, TRACE, T, hFig
@@ -972,8 +824,7 @@ def unified_pavement_design(
         return out
 
     # ------------------------- COARSE FEASIBILITY SEARCH -------------------------
-    # coarse feasibility iterations
-    maxItA = 100 if not ROADAX_FAST else 12
+    maxItA = 100
     BT_Thk_N = [math.nan] * maxItA
     Base_Thk_N = [math.nan] * maxItA
     Subbase_Thk_N = [math.nan] * maxItA
@@ -1187,7 +1038,7 @@ def unified_pavement_design(
 
     eqtol = 1e-9
     tolC = 1e-9
-    max_iter = 60 if not ROADAX_FAST else 6
+    max_iter = 60
 
     def step_mult(d, step):
         return (abs(d) < eqtol) or (abs((d % step)) < eqtol)
@@ -1305,7 +1156,7 @@ def unified_pavement_design(
     TRACE = [[BTc, CRLc, Basec, Subc, Nbf_c, Nsbr_c, Nctf_c, CFD_c, Costc]]
 
     tolC = 1e-9
-    max_iter = 60 if not ROADAX_FAST else 6
+    max_iter = 60
 
     for _ in range(max_iter):
         # neighbor masks w.r.t current point
@@ -1493,41 +1344,14 @@ def unified_pavement_design(
     rows = rows[np.argsort(rows[:, 8])]
 
     cols = ['BT', 'CRL', 'Base', 'Subbase', 'Nbf', 'Nsbr', 'Nctf', 'CFD', 'Cost']
-    if pd is not None:
-        T = pd.DataFrame(rows, columns=cols)
-        if not isT235:
-            T = T[['BT', 'CRL', 'Base', 'Subbase', 'Nbf', 'Nsbr', 'Cost']]
-        if T.empty:
-            Best = pd.DataFrame()
-        else:
-            Best = T.iloc[[0]]
-    else:
-        # dict-shaped tables for bridge JSON
-        if not isT235:
-            # project to fewer columns
-            proj_cols = ['BT', 'CRL', 'Base', 'Subbase', 'Nbf', 'Nsbr', 'Cost']
-            proj_idx = [cols.index(c) for c in proj_cols]
-            rows_proj = [[r[i] for i in proj_idx] for r in rows]
-            T = {"_type": "DataFrame", "columns": proj_cols, "data": [
-                {k: float(v) for k, v in zip(proj_cols, rr)} for rr in rows_proj
-            ]}
-        else:
-            T = {"_type": "DataFrame", "columns": cols, "data": [
-                {k: float(v) if v == v else None for k, v in zip(cols, rr)} for rr in rows
-            ]}
+    T = pd.DataFrame(rows, columns=cols)
+    if not isT235:
+        T = T[['BT', 'CRL', 'Base', 'Subbase', 'Nbf', 'Nsbr', 'Cost']]
 
-        if len(rows) == 0:
-            Best = {"_type": "DataFrame", "columns": (proj_cols if not isT235 else cols), "data": []}
-        else:
-            first = rows[0]
-            if not isT235:
-                first = [first[cols.index(c)] for c in ['BT','CRL','Base','Subbase','Nbf','Nsbr','Cost']]
-                bcols = ['BT','CRL','Base','Subbase','Nbf','Nsbr','Cost']
-            else:
-                bcols = cols
-            Best = {"_type": "DataFrame", "columns": bcols, "data": [
-                {k: float(v) if v == v else None for k, v in zip(bcols, first)}
-            ]}
+    if T.empty:
+        Best = pd.DataFrame()
+    else:
+        Best = T.iloc[[0]]
 
     return Best, T, TRACE
 
@@ -1961,24 +1785,22 @@ def AIO_R(
         Results.append(dict(sigma_z=0.0, sigma_r=0.0, sigma_t=0.0,
                             tau_rz=0.0, w=0.0, u=0.0))
 
-    # integrate m from 0 to L_MAX with 4-pt Gauss on each subinterval
+    # integrate m from 0 to 200 with 4-pt Gauss on each subinterval
     l = 0.0
-    L_MAX = 200.0 if not ROADAX_FAST else 40.0
-    step_scale = 1.0 if not ROADAX_FAST else 4.0  # larger step in FAST
-    while l <= L_MAX + 1e-12:
+    while l <= 200.0 + 1e-12:
         for gauss_point in (1, 2, 3, 4):
             if gauss_point == 1:
-                m  = (l + (dl*step_scale)/2.0) - 0.86114 * ((dl*step_scale)/2.0)
-                fc = 0.34786 * ((dl*step_scale)/2.0)
+                m  = (l + dl/2.0) - 0.86114 * (dl/2.0)
+                fc = 0.34786 * (dl/2.0)
             elif gauss_point == 2:
-                m  = (l + (dl*step_scale)/2.0) - 0.33998 * ((dl*step_scale)/2.0)
-                fc = 0.65215 * ((dl*step_scale)/2.0)
+                m  = (l + dl/2.0) - 0.33998 * (dl/2.0)
+                fc = 0.65215 * (dl/2.0)
             elif gauss_point == 3:
-                m  = (l + (dl*step_scale)/2.0) + 0.33998 * ((dl*step_scale)/2.0)
-                fc = 0.65215 * ((dl*step_scale)/2.0)
+                m  = (l + dl/2.0) + 0.33998 * (dl/2.0)
+                fc = 0.65215 * (dl/2.0)
             else:
-                m  = (l + (dl*step_scale)/2.0) + 0.86114 * ((dl*step_scale)/2.0)
-                fc = 0.34786 * ((dl*step_scale)/2.0)
+                m  = (l + dl/2.0) + 0.86114 * (dl/2.0)
+                fc = 0.34786 * (dl/2.0)
 
             Res_hat = AIO_R_hat(n, Thickness, E, v, isbonded, m, Points, H)
 
@@ -1994,7 +1816,7 @@ def AIO_R(
                     Results[j]["tau_rz"]  += fc * (q * alpha * Res_hat[j]["tau_rz"]  / m * J1)
                     Results[j]["w"]       += fc * (q * alpha * Res_hat[j]["w"]       / m * J1)
                     Results[j]["u"]       += fc * (q * alpha * Res_hat[j]["u"]       / m * J1)
-    l += dl * step_scale
+        l += dl
 
     # convert to strains with Hooke’s law (plane strain in 3D iso)
     for j in range(len(Points)):
@@ -2261,13 +2083,7 @@ def layer_names_by_type(Type: int, is_wmm_r: bool, is_gsb_r: bool) -> Tuple[str,
     return "Base", "Subbase"
 
 
-def display_unified_results_table(Best: Any, Type: int, is_wmm_r: bool, is_gsb_r: bool):
-    # If pandas is unavailable or Best isn't a DataFrame, return a fallback dict-shaped table and no figure
-    if pd is None or Best is None or not hasattr(Best, 'loc'):
-        # Minimal columns consistent with downstream expectations
-        cols = ["BC_mm","DBM_mm","CRL_Layer","CRL_mm","Base_Layer","Base_mm","Subbase_Layer","Subbase_mm","Nbf","Nsbr","Nctf","CFD","Cost"]
-        return {"_type": "DataFrame", "columns": cols, "data": []}, None
-
+def display_unified_results_table(Best: pd.DataFrame, Type: int, is_wmm_r: bool, is_gsb_r: bool):
     assert isinstance(Best, pd.DataFrame) and len(Best) == 1, "Best must be a 1-row DataFrame."
 
     BT = float(Best.loc[Best.index[0], "BT"])
@@ -2309,11 +2125,9 @@ def display_unified_results_table(Best: Any, Type: int, is_wmm_r: bool, is_gsb_r
     layer_thk.extend([DBM,    BC])
 
     # Fresh figure (important if function is called multiple times)
-    fig = None
-    if plt is not None:
-        fig = plt.figure("Pavement Thickness", figsize=(5, 4))
-        fig.clf()
-        ax = fig.add_subplot(111)
+    fig = plt.figure("Pavement Thickness", figsize=(5, 4))
+    fig.clf()
+    ax = fig.add_subplot(111)
 
     # Draw the stacked bars and keep the handles we want in the legend
     bottom = 0.0
@@ -2321,30 +2135,29 @@ def display_unified_results_table(Best: Any, Type: int, is_wmm_r: bool, is_gsb_r
     for label, thk in zip(layer_labels, layer_thk):
         if thk <= 0:
             continue
-        if plt is not None:
-            bar = ax.bar([1], [thk], width=0.5, bottom=[bottom])
-            handles.append(bar[0])
-            labels.append(label)
-            ax.text(1, bottom + thk/2.0, f"{int(thk)} mm", ha="center", va="center", fontsize=9)
+        bar = ax.bar([1], [thk], width=0.5, bottom=[bottom])
+        handles.append(bar[0])
+        labels.append(label)
+        ax.text(1, bottom + thk/2.0, f"{int(thk)} mm", ha="center", va="center", fontsize=9)
         bottom += thk
-    if plt is not None:
-        ax.set_xticks([1], [""])
-        ax.set_ylabel("Thickness (mm)")
-        ax.set_title("Pavement Layer Stack")
-        ax.set_ylim(0, max(1.0, 1.1 * bottom))
-        ax.legend(handles, labels, loc="center left", bbox_to_anchor=(1.0, 0.5))
-        fig.tight_layout()
+
+    ax.set_xticks([1], [""])
+    ax.set_ylabel("Thickness (mm)")
+    ax.set_title("Pavement Layer Stack")
+    ax.set_ylim(0, max(1.0, 1.1 * bottom))
+    ax.legend(handles, labels, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    fig.tight_layout()
 
     return ResultsTable, fig
 
 
 # ------------------- convenience helpers / demo -------------------
 
-def export_results_to_csv(results_table: Any, path: str) -> str:
+def export_results_to_csv(results_table: pd.DataFrame, path: str) -> str:
     """
     Save the 1-row results table to CSV and return the path.
     """
-    if pd is None or results_table is None or getattr(results_table, 'empty', False):
+    if results_table is None or results_table.empty:
         raise ValueError("No results to export.")
     results_table.to_csv(path, index=False)
     return path

@@ -4,7 +4,11 @@ import math
 from typing import List, Dict, Any, Tuple, Optional
 
 import numpy as np
-import pandas as pd  # (not used by the core, kept to match your import style)
+# pandas is optional; core logic does not require it
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # ModuleNotFoundError or others
+    pd = None  # sentinel; not used in core
 from scipy.special import jv as besselj  # Bessel J_v(x)
 
 

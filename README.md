@@ -174,3 +174,143 @@ If you encounter timeouts in full-fidelity mode, increase `BRIDGE_TIMEOUT_MS` or
 ## License
 
 Proprietary or internal use. If you plan to open-source this repo, add an explicit license.
+
+
+## How to call Features
+
+### Effective CBR Calculation
+
+curl -sS -X POST http://localhost:3000/effective-cbr/runs \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "number_of_layer": 5,
+    "thk": [200, 300, 100, 400],
+    "CBR": [10, 5, 10, 5, 8],
+    "Poisson_r": [0.35, 0.35, 0.35, 0.35, 0.35]
+  }' | jq
+
+### Critical Strain Analysis
+
+curl -sS -X POST http://localhost:3000/criticals/runs \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Number_of_layers": 5,
+    "Thickness_layers": [100.0, 200.0, 200.0, 250.0],
+    "Modulus_layers": [3000.0, 400.0, 5000.0, 800.0, 100.0],
+    "Poissons": [0.35, 0.35, 0.25, 0.35, 0.35],
+    "Eva_depth_bituminous": 100.0,
+    "Eva_depth_base": 500.0,
+    "Eva_depth_Subgrade": 750.0,
+    "CFD_Check": 1,
+    "FS_CTB_T": 1.4,
+    "SA_M_T": [[185, 195, 70000],[175, 185, 90000]],
+    "TaA_M_T": [[390, 410, 200000],[370, 390, 230000]],
+  }' | jqM_T": [[585, 615, 35000],[555, 585, 40000]]
+
+
+### Permissible Strain Analysis
+
+curl -sS -X POST http://localhost:3000/permissible-strain/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "Design_Traffic": 50,
+    "Reliability": 90,
+    "Va": 4,
+    "Vbe": 11,
+    "BT_Mod": 3000,
+    "Base_ctb": 0,
+    "Base_Mod": null,
+    "RF_CTB": null
+  }'
+
+### Multilayer Analysis
+
+curl -sS -X POST http://localhost:3000/multilayer/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "Number_of_layers": 3,
+    "Thickness_layers": [100, 200],
+    "Modulus_layers": [3000, 600, 150],
+    "Poissons": [0.35, 0.35, 0.45],
+    "Tyre_pressure": 0.8,
+    "wheel_load": 40,
+    "wheel_set": 1,
+    "analysis_points": 3,
+    "depths": [50, 100, 300],
+    "radii": [0, 150, 300],
+    "isbonded": true,
+    "center_spacing": 0,
+    "alpha_deg": 0
+  }'
+
+### Design By Type
+
+curl -sS -X POST http://localhost:3000/design/runs \
+  -H "Content-Type: application/json" \
+  --data-binary @- <<'JSON'
+{
+  "Type": 2,
+  "Design_Traffic": 30,
+  "Effective_Subgrade_CBR": 8,
+  "Reliability": 90,
+  "Va": 4,
+  "Vbe": 11,
+  "BT_Mod": 3000,
+  "BC_cost": 6000,
+  "DBM_cost": 5000,
+  "BC_DBM_width": 3.5,
+  "Base_cost": 2000,
+  "Subbase_cost": 1500,
+  "Base_Sub_width": 3.75
+}
+JSON
+
+
+### Design Then Hydrate
+
+curl -sS -X POST http://localhost:3000/pipeline/design-then-hydrate \
+  -H "Content-Type: application/json" \
+  --data-binary @- <<'JSON'
+{
+  "Type": 2,
+  "Design_Traffic": 30,
+  "Effective_Subgrade_CBR": 8,
+  "Reliability": 90,
+  "Va": 4,
+  "Vbe": 11,
+  "BT_Mod": 3000,
+  "BC_cost": 6000,
+  "DBM_cost": 5000,
+  "BC_DBM_width": 3.5,
+  "Base_cost": 2000,
+  "Subbase_cost": 1500,
+  "Base_Sub_width": 3.75,
+  "cfdchk_UI": null, "FS_CTB_UI": null, "RF_UI": null,
+  "CRL_cost_UI": null, "SAMI_cost_UI": null,
+  "Rtype_UI": null, "is_wmm_r_UI": null, "R_Base_UI": null,
+  "is_gsb_r_UI": null, "R_Subbase_UI": null,
+  "wmm_r_cost_UI": null, "gsb_r_cost_UI": null,
+  "SA_M_UI": null, "TaA_M_UI": null, "TrA_M_UI": null,
+  "AIL_Mod_UI": null, "WMM_Mod_UI": null, "ETB_Mod_UI": null,
+  "CTB_Mod_UI": null, "CTSB_Mod_UI": null
+}
+JSON
+
+## Instruction to Run
+
+1) Create Python Virtual Environment inside the Roadax_Python_Functions folder and activate it
+
+2) Install: scipy, pandas, numpy, matplotlib
+
+4) Set Environment Variables in the Root Folder
+
+> export ROADAX_FAST=0
+> export BRIDGE_TIMEOUT_MS=600000
+
+5) Install NPM Dependencies and Start the Server
+
+> npm install
+> npx prisma migrate
+> npm run dev
+
+6) Make requests using Curl by syntax above
