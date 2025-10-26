@@ -1,14 +1,19 @@
+from __future__ import annotations
 # unified_pavement_design.py
 # Faithful MATLAB→Python conversion (no logic changes).
 # Uses SciPy's jv aliased as besselj to match MATLAB besselj.
 # Requires: numpy, pandas, scipy, matplotlib
 
 import math
+import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # optional: allow running without pandas
+    pd = None  # type: ignore
 from scipy.special import jv as besselj
 import matplotlib.pyplot as plt
 
@@ -208,11 +213,64 @@ def run_unified_pavement_design(
 
     # Results table + optional plot
     hFig = None
-    if Best is None or Best.empty:
-        print("Warning: No feasible design found. Skipping table/plot.")
-        ResultsTable = pd.DataFrame()
+    def _is_empty_df(df: Any) -> bool:
+        try:
+            return df is None or (hasattr(df, 'empty') and bool(getattr(df, 'empty')))
+        except Exception:
+            return False
+    is_empty = False
+    if pd is not None:
+        is_empty = _is_empty_df(Best)
     else:
-        ResultsTable, hFig = display_unified_results_table(Best, Type, bool(is_wmm_r) if is_wmm_r is not None else False, bool(is_gsb_r) if is_gsb_r is not None else False)
+        # dict-shaped DataFrame fallback: {'_type':'DataFrame','columns':[...] ,'data':[...]]}
+        try:
+            is_empty = (Best is None) or (isinstance(Best, dict) and len(Best.get('data') or []) == 0)
+        except Exception:
+            is_empty = Best is None
+
+    if is_empty:
+        print("Warning: No feasible design found. Skipping table/plot.", file=sys.stderr)
+        ResultsTable = pd.DataFrame() if pd is not None else {"_type": "DataFrame", "columns": [], "data": []}
+    else:
+        if pd is not None:
+            ResultsTable, hFig = display_unified_results_table(Best, Type, bool(is_wmm_r) if is_wmm_r is not None else False, bool(is_gsb_r) if is_gsb_r is not None else False)
+        else:
+            # Build minimal results table without pandas/matplotlib
+            if isinstance(Best, dict) and Best.get('_type') == 'DataFrame' and Best.get('data'):
+                row = Best['data'][0]
+                cols = [
+                    'BC_mm','DBM_mm','CRL_Layer','CRL_mm','Base_Layer','Base_mm','Subbase_Layer','Subbase_mm',
+                    'Nbf','Nsbr','Nctf','CFD','Cost'
+                ]
+                # derive BC/DBM split
+                BT = float(row.get('BT', 0) or 0)
+                if BT <= 40:
+                    BC, DBM = BT, 0.0
+                elif BT < 90:
+                    BC, DBM = 30.0, BT - 30.0
+                else:
+                    BC, DBM = 40.0, BT - 40.0
+                ResultsTable = {
+                    "_type": "DataFrame",
+                    "columns": cols,
+                    "data": [{
+                        'BC_mm': BC,
+                        'DBM_mm': DBM,
+                        'CRL_Layer': ('CRL (AIL)' if (Type in (2,5) and float(row.get('CRL', 0) or 0) > 0) else ("CRL (SAMI)" if Type==3 and float(row.get('CRL',0) or 0)>0 else '')),
+                        'CRL_mm': float(row.get('CRL', 0) or 0),
+                        'Base_Layer': layer_names_by_type(Type, bool(is_wmm_r_UI), bool(is_gsb_r_UI))[0],
+                        'Base_mm': float(row.get('Base', 0) or 0),
+                        'Subbase_Layer': layer_names_by_type(Type, bool(is_wmm_r_UI), bool(is_gsb_r_UI))[1],
+                        'Subbase_mm': float(row.get('Subbase', 0) or 0),
+                        'Nbf': float(row.get('Nbf', float('nan'))),
+                        'Nsbr': float(row.get('Nsbr', float('nan'))),
+                        'Nctf': float(row.get('Nctf', float('nan'))),
+                        'CFD': float(row.get('CFD', float('nan'))),
+                        'Cost': float(row.get('Cost', float('nan'))),
+                    }]
+                }
+            else:
+                ResultsTable = {"_type": "DataFrame", "columns": [], "data": []}
 
     # ------------------------- BUILD SHARED -------------------------
     Shared: Dict[str, Any] = {}
@@ -257,26 +315,44 @@ def run_unified_pavement_design(
     )
 
     # Thicknesses from Best
-    if Best is not None and not Best.empty:
-        Shared["BT_thk"] = float(Best["BT"].iloc[0])
-        Shared["CRL_thk"] = float(Best["CRL"].iloc[0]) if "CRL" in Best.columns else 0.0
-        Shared["Base_thk"] = float(Best["Base"].iloc[0])
-        Shared["Subbase_thk"] = float(Best["Subbase"].iloc[0])
-        if "Cost" in Best.columns:
-            Shared["Cost"] = float(Best["Cost"].iloc[0])
-        if "Nbf" in Best.columns:
-            Shared["Nbf"] = float(Best["Nbf"].iloc[0])
-        if "Nsbr" in Best.columns:
-            Shared["Nsbr"] = float(Best["Nsbr"].iloc[0])
-        if "Nctf" in Best.columns:
-            Shared["Nctf"] = float(Best["Nctf"].iloc[0])
-        if "CFD" in Best.columns:
-            Shared["CFD"] = float(Best["CFD"].iloc[0])
+    if pd is not None:
+        if Best is not None and not Best.empty:
+            Shared["BT_thk"] = float(Best["BT"].iloc[0])
+            Shared["CRL_thk"] = float(Best["CRL"].iloc[0]) if "CRL" in Best.columns else 0.0
+            Shared["Base_thk"] = float(Best["Base"].iloc[0])
+            Shared["Subbase_thk"] = float(Best["Subbase"].iloc[0])
+            if "Cost" in Best.columns:
+                Shared["Cost"] = float(Best["Cost"].iloc[0])
+            if "Nbf" in Best.columns:
+                Shared["Nbf"] = float(Best["Nbf"].iloc[0])
+            if "Nsbr" in Best.columns:
+                Shared["Nsbr"] = float(Best["Nsbr"].iloc[0])
+            if "Nctf" in Best.columns:
+                Shared["Nctf"] = float(Best["Nctf"].iloc[0])
+            if "CFD" in Best.columns:
+                Shared["CFD"] = float(Best["CFD"].iloc[0])
+        else:
+            Shared["BT_thk"], Shared["CRL_thk"], Shared["Base_thk"], Shared["Subbase_thk"] = 0.0, 0.0, 0.0, 0.0
     else:
-        Shared["BT_thk"] = 0.0
-        Shared["CRL_thk"] = 0.0
-        Shared["Base_thk"] = 0.0
-        Shared["Subbase_thk"] = 0.0
+        # dict-shaped Best
+        if isinstance(Best, dict) and Best.get('_type') == 'DataFrame' and Best.get('data'):
+            row = Best['data'][0]
+            Shared["BT_thk"] = float(row.get('BT', 0) or 0)
+            Shared["CRL_thk"] = float(row.get('CRL', 0) or 0)
+            Shared["Base_thk"] = float(row.get('Base', 0) or 0)
+            Shared["Subbase_thk"] = float(row.get('Subbase', 0) or 0)
+            if 'Cost' in row:
+                Shared["Cost"] = float(row.get('Cost') or 0)
+            if 'Nbf' in row:
+                Shared["Nbf"] = float(row.get('Nbf') or 0)
+            if 'Nsbr' in row:
+                Shared["Nsbr"] = float(row.get('Nsbr') or 0)
+            if 'Nctf' in row:
+                Shared["Nctf"] = float(row.get('Nctf') or 0)
+            if 'CFD' in row:
+                Shared["CFD"] = float(row.get('CFD') or 0)
+        else:
+            Shared["BT_thk"], Shared["CRL_thk"], Shared["Base_thk"], Shared["Subbase_thk"] = 0.0, 0.0, 0.0, 0.0
 
     # Subgrade modulus from CBR
     CBR = Shared["Effective_Subgrade_CBR"]
@@ -361,7 +437,8 @@ def run_unified_pavement_design(
 
     print(
         f"Type={Type} | BT={Shared['BT_thk']} mm | Base={Shared['Base_thk']} mm | Subbase={Shared['Subbase_thk']} mm | "
-        f"Ebase={Shared.get('Base_mod', float('nan'))} MPa | Esub={Shared.get('Subbase_mod', float('nan'))} MPa"
+        f"Ebase={Shared.get('Base_mod', float('nan'))} MPa | Esub={Shared.get('Subbase_mod', float('nan'))} MPa",
+        file=sys.stderr,
     )
 
     return Best, ResultsTable, Shared, TRACE, T, hFig
@@ -1344,14 +1421,34 @@ def unified_pavement_design(
     rows = rows[np.argsort(rows[:, 8])]
 
     cols = ['BT', 'CRL', 'Base', 'Subbase', 'Nbf', 'Nsbr', 'Nctf', 'CFD', 'Cost']
-    T = pd.DataFrame(rows, columns=cols)
-    if not isT235:
-        T = T[['BT', 'CRL', 'Base', 'Subbase', 'Nbf', 'Nsbr', 'Cost']]
-
-    if T.empty:
-        Best = pd.DataFrame()
+    if pd is not None:
+        T = pd.DataFrame(rows, columns=cols)
+        if not isT235:
+            T = T[['BT', 'CRL', 'Base', 'Subbase', 'Nbf', 'Nsbr', 'Cost']]
+        if T.empty:
+            Best = pd.DataFrame()
+        else:
+            Best = T.iloc[[0]]
     else:
-        Best = T.iloc[[0]]
+        # dict-shaped DataFrame fallback
+        if not isT235:
+            cols_use = ['BT', 'CRL', 'Base', 'Subbase', 'Nbf', 'Nsbr', 'Cost']
+            data = [
+                {
+                    'BT': float(r[0]), 'CRL': 0.0, 'Base': float(r[2]), 'Subbase': float(r[3]),
+                    'Nbf': float(r[4]), 'Nsbr': float(r[5]), 'Cost': float(r[8])
+                } for r in rows
+            ]
+        else:
+            cols_use = cols
+            data = [
+                {
+                    'BT': float(r[0]), 'CRL': float(r[1]), 'Base': float(r[2]), 'Subbase': float(r[3]),
+                    'Nbf': float(r[4]), 'Nsbr': float(r[5]), 'Nctf': float(r[6]), 'CFD': float(r[7]), 'Cost': float(r[8])
+                } for r in rows
+            ]
+        T = {"_type": "DataFrame", "columns": cols_use, "data": data}
+        Best = {"_type": "DataFrame", "columns": cols_use, "data": [data[0]]} if data else {"_type": "DataFrame", "columns": cols_use, "data": []}
 
     return Best, T, TRACE
 

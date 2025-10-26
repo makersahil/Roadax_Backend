@@ -62,7 +62,16 @@ export const pipelineRoutes: FastifyPluginCallback = (app: FastifyInstance, _opt
     const parse = DesignRequest.safeParse(req.body)
     if (!parse.success) return reply.code(400).send({ ok: false, error: { type: 'ValidationError', message: 'Invalid request', details: parse.error.flatten() } })
 
-    const input = parse.data
+    const base = parse.data as any
+    const optKeys = [
+      'cfdchk_UI','FS_CTB_UI','RF_UI','CRL_cost_UI','SAMI_cost_UI','Rtype_UI','is_wmm_r_UI','R_Base_UI','is_gsb_r_UI','R_Subbase_UI',
+      'wmm_r_cost_UI','gsb_r_cost_UI','SA_M_UI','TaA_M_UI','TrA_M_UI','AIL_Mod_UI','WMM_Mod_UI','ETB_Mod_UI','CTB_Mod_UI','CTSB_Mod_UI'
+    ] as const
+    const filled: Record<string, any> = { ...base }
+    for (const k of optKeys) {
+      if (!(k in filled)) filled[k] = null
+    }
+    const input = filled
     const payload = { pipeline: 'design_then_hydrate', design_args: input }
     const inputHash = stableHash(payload)
 
