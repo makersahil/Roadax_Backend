@@ -13,13 +13,13 @@ This repo is designed to make it easy for starters to:
 ## Repository structure
 
 - `Roadax_Python_Functions/` — Python source for the computational core (design, analysis, and pipeline helpers)
-  - `Design_by_type.py` — main unified design routine (fast CI/testing shortcut available)
+  - `Design_by_type.py` — main unified design routine
   - `Critical_Strain_Analysis.py`, `Multilayer_Analysis.py`, `Permissible_Strain_Analysis.py`, `Effective_CBR_Calc.py` — analysis modules
   - `Edit_type_to_check.py` — hydration/reporting helpers
   - `Bridge.py` or `python_api_bridge.py` (depending on branch) — stdin/stdout JSON bridge used by Node
 - `node-api/` — TypeScript Fastify API that calls into Python and returns JSON results
 
-> Tip: For real runs, Python can be compute-heavy and long-running. For development and tests, there is a “fast mode” that returns deterministic, lightweight results so you can iterate quickly.
+> Note: Full-fidelity Python runs can take time (tens of seconds to minutes) depending on inputs. Ensure API timeouts are configured generously in development and production.
 
 ---
 
@@ -69,10 +69,10 @@ npm install
 ```
 
 Environment variables (configure via your shell or a `.env` file):
-- `PYTHON_BIN` — Path to Python executable the API should use (default: `python3`)
-- `BRIDGE_TIMEOUT_MS` — Max milliseconds to wait for a Python run (example: `600000` for 10 minutes)
-- `ROADAX_FAST` — Set to `1` to enable fast, deterministic Python responses for development/tests
-- `DATABASE_URL` — Prisma connection string if you’re using persistence (e.g., PostgreSQL)
+- `PYTHON_BIN` — Path to Python executable the API should use (default: `python3`). Prefer the venv Python.
+- `PYTHON_BRIDGE_PATH` — Absolute path to the Python bridge file (e.g., `/abs/path/to/Roadax_Python_Functions/python_api_bridge.py`).
+- `BRIDGE_TIMEOUT_MS` — Max milliseconds to wait for a Python run (example: `600000` for 10 minutes).
+- `DATABASE_URL` — Prisma connection string if you’re using persistence (e.g., PostgreSQL).
 
 If using the database features:
 
@@ -112,23 +112,49 @@ The API proxies your input to Python and returns JSON that mirrors Python’s na
 
 > Note: Exact request schemas may vary by branch. For concrete request bodies, check `node-api/tests/*.test.ts` — these files demonstrate known-good payloads used in CI.
 
-### Fast responses for development
+### Available endpoints and Python mapping
 
-For quick iteration or CI, set `ROADAX_FAST=1` before starting the API. In this mode, Python’s design routine returns a deterministic, minimal result in ~1s while preserving the final JSON shape. This is ideal for building UI or writing tests without waiting minutes for full simulations.
+- Health
+  - `GET /health` → Node-only health probe.
+  - `GET /health/python` → Bridge no-op check (invokes the Python bridge; verifies readiness).
 
----
+- Effective CBR Calculation
+  - `POST /effective-cbr/runs` → `Roadax_Python_Functions/Effective_CBR_Calc.py`
+  - `GET  /effective-cbr/runs/:id` → fetch run by id (if persistence enabled)
+
+- Critical Strain Analysis
+  - `POST /criticals/runs` → `Roadax_Python_Functions/Critical_Strain_Analysis.py`
+  - `GET  /criticals/runs/:id` → fetch run by id (if persistence enabled)
+
+- Multilayer Analysis
+  - `POST /multilayer/runs` → `Roadax_Python_Functions/Multilayer_Analysis.py`
+  - `GET  /multilayer/runs/:id` → fetch run by id (if persistence enabled)
+
+- Permissible Strain Analysis
+  - `POST /permissible-strain/runs` → `Roadax_Python_Functions/Permissible_Strain_Analysis.py`
+  - `GET  /permissible-strain/runs/:id` → fetch run by id (if persistence enabled)
+
+- Design by Type
+  - `POST /design/runs` → `Roadax_Python_Functions/Design_by_type.py` (unified design)
+  - `GET  /design/runs/:id` → fetch run by id (if persistence enabled)
+  - `GET  /design/runs/:id/trace` → returns `TRACE` and `T` from the stored result
+
+- Pipeline
+  - `POST /pipeline/design-then-hydrate` → composite pipeline using `Design_by_type.py` + hydration from `Edit_type_to_check.py`
+  - `GET  /pipeline/design-then-hydrate/runs/:id` → fetch run by id (if persistence enabled)
+
+> Note: GET endpoints that fetch by id require the database to be configured (Prisma/Postgres). If persistence is not set up, rely on the immediate POST response body (which already includes the computed result and runId).
 
 ## Example flows
 
 - Quick local check without a DB:
   1. Start Python venv and install packages.
-  2. Start Node API with `ROADAX_FAST=1`.
+  2. Start the Node API.
   3. Use a REST client (VS Code REST, Postman, or curl) to hit `POST /pipeline/design-then-hydrate` with the same body seen in `tests/pipeline.test.ts`.
-  4. Inspect `cost_lakh_km` and `breakdown` — values should be numeric and stable in fast mode.
+  4. Inspect `cost_lakh_km` and `breakdown` — values should be numeric and consistent with inputs.
 
 - Full-fidelity runs (longer):
-  1. Unset `ROADAX_FAST`.
-  2. Increase `BRIDGE_TIMEOUT_MS` (or run in a job queue/worker).
+  1. Increase `BRIDGE_TIMEOUT_MS` (or run in a job queue/worker).
   3. Run the same endpoints; expect longer compute times.
 
 ---
@@ -139,11 +165,10 @@ The Node API uses Vitest + Supertest.
 
 ```bash
 cd node-api
-# Enable fast mode for quick test runs
-ROADAX_FAST=1 npm test
+npm test
 ```
 
-If you encounter timeouts in full-fidelity mode, increase `BRIDGE_TIMEOUT_MS` or use fast mode.
+If you encounter timeouts during tests, increase `BRIDGE_TIMEOUT_MS` or temporarily narrow the test set.
 
 ---
 
@@ -166,8 +191,9 @@ If you encounter timeouts in full-fidelity mode, increase `BRIDGE_TIMEOUT_MS` or
 
 ## Notes
 
-- Long computations: production deployments should consider a background job or queue for heavy designs. The synchronous bridge is great for development, short analyses, or fast-mode runs.
-- JSON safety: the bridge sanitizes `NaN`, `Infinity`, and non-serializable types into JSON-safe values.
+- Long computations: production deployments should consider a background job or queue for heavy designs. The synchronous bridge is great for development and short analyses.
+- JSON safety: the bridge sanitizes `NaN`, `Infinity`, and non-serializable types into JSON-safe values. Python prints/logs are routed to stderr to keep stdout strict JSON.
+- Pandas optionality: where applicable (e.g., design), results can be returned as plain dict-shaped tables if pandas isn’t available; installing pandas restores full DataFrame-shaped JSON.
 
 ---
 
@@ -177,6 +203,12 @@ Proprietary or internal use. If you plan to open-source this repo, add an explic
 
 
 ## How to call Features
+
+### Health
+
+curl -sS http://localhost:3000/health | jq
+
+curl -sS http://localhost:3000/health/python | jq
 
 ### Effective CBR Calculation
 
@@ -189,7 +221,10 @@ curl -sS -X POST http://localhost:3000/effective-cbr/runs \
     "Poisson_r": [0.35, 0.35, 0.35, 0.35, 0.35]
   }' | jq
 
-### Critical Strain Analysis
+# Fetch by run id (replace RUN_ID)
+curl -sS http://localhost:3000/effective-cbr/runs/RUN_ID | jq
+
+### Critical Strain Analysis (CFD off)
 
 curl -sS -X POST http://localhost:3000/criticals/runs \
   -H 'Content-Type: application/json' \
@@ -201,11 +236,11 @@ curl -sS -X POST http://localhost:3000/criticals/runs \
     "Eva_depth_bituminous": 100.0,
     "Eva_depth_base": 500.0,
     "Eva_depth_Subgrade": 750.0,
-    "CFD_Check": 1,
-    "FS_CTB_T": 1.4,
-    "SA_M_T": [[185, 195, 70000],[175, 185, 90000]],
-    "TaA_M_T": [[390, 410, 200000],[370, 390, 230000]],
-  }' | jqM_T": [[585, 615, 35000],[555, 585, 40000]]
+    "CFD_Check": 0
+  }' | jq
+
+# Fetch by run id (replace RUN_ID)
+curl -sS http://localhost:3000/criticals/runs/RUN_ID | jq
 
 
 ### Permissible Strain Analysis
@@ -222,6 +257,9 @@ curl -sS -X POST http://localhost:3000/permissible-strain/runs \
     "Base_Mod": null,
     "RF_CTB": null
   }'
+
+# Fetch by run id (replace RUN_ID)
+curl -sS http://localhost:3000/permissible-strain/runs/RUN_ID | jq
 
 ### Multilayer Analysis
 
@@ -242,6 +280,9 @@ curl -sS -X POST http://localhost:3000/multilayer/runs \
     "center_spacing": 0,
     "alpha_deg": 0
   }'
+
+# Fetch by run id (replace RUN_ID)
+curl -sS http://localhost:3000/multilayer/runs/RUN_ID | jq
 
 ### Design By Type
 
@@ -264,6 +305,12 @@ curl -sS -X POST http://localhost:3000/design/runs \
   "Base_Sub_width": 3.75
 }
 JSON
+
+# Fetch by run id (replace RUN_ID)
+curl -sS http://localhost:3000/design/runs/RUN_ID | jq
+
+# Fetch trace (TRACE + T)
+curl -sS http://localhost:3000/design/runs/RUN_ID/trace | jq
 
 
 ### Design Then Hydrate
@@ -296,6 +343,9 @@ curl -sS -X POST http://localhost:3000/pipeline/design-then-hydrate \
 }
 JSON
 
+# Fetch by run id (replace RUN_ID)
+curl -sS http://localhost:3000/pipeline/design-then-hydrate/runs/RUN_ID | jq
+
 ## Instruction to Run
 
 1) Create Python Virtual Environment inside the Roadax_Python_Functions folder and activate it
@@ -304,7 +354,8 @@ JSON
 
 4) Set Environment Variables in the Root Folder
 
-> export ROADAX_FAST=0
+> export PYTHON_BIN="$(pwd)/Roadax_Python_Functions/.venv/bin/python"
+> export PYTHON_BRIDGE_PATH="$(pwd)/Roadax_Python_Functions/python_api_bridge.py"
 > export BRIDGE_TIMEOUT_MS=600000
 
 5) Install NPM Dependencies and Start the Server
@@ -314,3 +365,15 @@ JSON
 > npm run dev
 
 6) Make requests using Curl by syntax above
+
+---
+
+## Deployment checklist
+
+- Use absolute path for `PYTHON_BRIDGE_PATH` so the process manager/service can find the bridge reliably.
+- Point `PYTHON_BIN` to the correct virtual environment interpreter.
+- Increase `BRIDGE_TIMEOUT_MS` to cover longest expected design runs (e.g., 10–20 minutes).
+- Align upstream proxy timeouts (nginx, load balancer) with the backend timeout.
+- Ensure Python dependencies are installed in the target environment (numpy/scipy; pandas optional).
+- If using Prisma/Postgres, ensure `DATABASE_URL` is set and DB is reachable.
+- After changing `.env`, restart the Node process to apply.
